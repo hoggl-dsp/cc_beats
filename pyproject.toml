@@ -13,6 +13,8 @@ dependencies = [
     "pandas",
     "pytest",
     "symusic",
+    "midi2audio",
+    "ipywidgets"
 ]
 
 [tool.setuptools]
