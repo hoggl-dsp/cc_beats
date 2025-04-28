@@ -1,0 +1,19 @@
+[project]
+name = "cc_beats"
+version = "0.0.1"
+authors = [
+    { name = "Lawrence Hogg" }
+]
+readme = "README.md"
+dependencies = [
+    "torch",
+    "torchaudio",
+    "tensorboard",
+    "matplotlib",
+    "pandas",
+    "pytest",
+    "symusic",
+]
+
+[tool.setuptools]
+packages = ["cc_beats"]
