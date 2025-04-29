@@ -3,6 +3,7 @@ import symusic
 import symusic.types
 from typing import Union
 import os
+import tqdm
 
 ROLAND_DRUM_MAPPING = {
     35  : 36, # Kick 2
@@ -118,7 +119,7 @@ class DrumSequenceTokeniser:
     
     def encode_all(self, midis: list[Union[str, symusic.types.Score]]) -> list[list[int]]:
         sequences = []
-        for midi in midis:
+        for midi in tqdm.tqdm(midis, desc='Encoding Midi Files'):
             seqeunce = self.encode(midi)
             if seqeunce is not None:
                 sequences.append(seqeunce)
@@ -167,6 +168,124 @@ class DrumSequenceTokeniser:
 
         return scores
 
+class TokeneiserII:
+    def __init__(self, velocity_bands: int = 4, drum_mapping: dict[int, int] = ROLAND_DRUM_MAPPING):
+        self.velocity_bands = velocity_bands
+        self.drum_mapping = drum_mapping
+        self.tpq = 480
+
+        self.vocab = {
+            '<pad>': 0,
+            '<mask>': 1,
+            '<bos>': 2,
+            '<eos>': 3,
+        }
+        self.special_token_count = len(self.vocab)
+
+        for i in range(5):
+            self.vocab[f't{i}'] = len(self.vocab)
+
+        for pitch in drum_mapping.values():
+            for vel in range(self.velocity_bands):
+                key = f'p{pitch}_v{vel}'
+                if key not in self.vocab:
+                    self.vocab[key] = len(self.vocab)
+    
+    def __len__(self):
+        return len(self.vocab)
+    
+    def __getitem__(self, key):
+        return self.vocab[key]
+        
+    def encode(self, midi: Union[str, symusic.types.Score]) -> list[int] | None:
+        # Load MIDI if needed
+        if isinstance(midi, str):
+            try:
+                midi = symusic.Score.from_file(midi)
+            except:
+                return None
+        
+        if midi.tpq != self.tpq:
+            midi.resample(self.tpq)
+        
+        drum_tracks = [track for track in midi.tracks if track.is_drum]
+        
+        all_notes = sorted(
+            (note for track in drum_tracks for note in track.notes),
+            key=lambda n: n.time
+        )
+
+        toks = []
+        last_note_time = 0
+        for note in all_notes:
+            if note.pitch not in self.drum_mapping:
+                continue
+
+            if len(toks) != 0:
+                time_delta = note.time - last_note_time
+                time_tok = 4
+                while time_tok >= 0:
+                    while time_delta > 10 ** time_tok:
+                        toks.append(f't{time_tok}')
+                        time_delta -= 10 ** time_tok
+                    time_tok -= 1
+            
+            pitch = self.drum_mapping[note.pitch]
+            vel = int(note.velocity * self.velocity_bands / 128)
+            toks.append(f'p{pitch}_v{vel}')
+            last_note_time = note.time
+        
+        return [self.vocab[tok] for tok in toks]
+
+    def encode_all(self, midis: list[Union[str, symusic.types.Score]]) -> list[list[int]]:
+        sequences = []
+        for midi in tqdm.tqdm(midis, desc='Encoding Midi Files'):
+            sequence = self.encode(midi)
+            if sequence is not None:
+                sequences.append(sequence)
+        return sequences
+    
+    def decode(self, tokens: list[int] | torch.Tensor, vocab_inv: dict[int, str] = None) -> symusic.types.Score:
+        if isinstance(tokens, torch.Tensor):
+            tokens = tokens.tolist()
+        
+        if vocab_inv is None:
+            vocab_inv = {v:k for k,v in self.vocab.items()}
+        
+        str_tokens = [vocab_inv[tok_id] for tok_id in tokens]
+
+        track = symusic.Track('Drums', is_drum=True)
+        toks_to_ignore = ('<pad>', '<mask>', '<bos>', '<eos>')
+        tick = 0
+
+        for tok in str_tokens:
+            if tok in toks_to_ignore:
+                continue
+
+            if 't' in tok:
+                tick += 10 ** int(tok[-1])
+            else:
+                pitch, vel = tok.split('_')
+                pitch = int(pitch[1:])
+                vel = int((int(vel[1:]) + 0.5) * (128 / self.velocity_bands)) if self.velocity_bands != 0 else 80
+                track.notes.append(symusic.Note(tick, 80, pitch, vel))
+        
+        score = symusic.Score(self.tpq)
+        score.tracks.append(track)
+
+        return score
+
+    def decode_all(self, token_set: list[list[int]] | torch.Tensor) -> list[symusic.types.Score]:
+        if isinstance(token_set, torch.Tensor):
+            token_set = token_set.tolist()
+        
+        vocab_inv = {v:k for k,v in self.vocab.items()}
+        scores = []
+        for tokens in token_set:
+            scores.append(self.decode(tokens, vocab_inv))
+
+        return scores
+
 class DrumSequenceEncoder:
     def __init__(self, drum_mapping: dict[int, int] = ROLAND_DRUM_MAPPING, subdivision: int = 16):
         self.drum_mapping = drum_mapping
@@ -180,25 +299,36 @@ class DrumSequenceEncoder:
     def encode(self, midi: Union[str, symusic.types.Score]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # Load MIDI if needed
         if isinstance(midi, str):
-            midi = symusic.Score.from_file(midi)
+            try:
+                midi = symusic.Score.from_file(midi)
+            except:
+                return None
         
-        # Find drum track
-        drum_track = None
-        for track in midi.tracks:
-            if track.is_drum:
-                drum_track = track
-                break
+        drum_tracks = [track for track in midi.tracks if track.is_drum]
+        if len(drum_tracks) == 0:
+            return None
+        
+        all_notes = sorted(
+            (note for track in drum_tracks for note in track.notes),
+            key=lambda n: n.time
+        )
+
+        if len(all_notes) == 0:
+            return None
 
         ticks_per_subdiv = midi.ticks_per_quarter * (4. / self.subdivision)
 
-        last_note = drum_track.notes[-1].time
+        last_note = all_notes[-1].time
         grid_length = int((last_note + 0.5 * ticks_per_subdiv) / ticks_per_subdiv) + 1
 
         hit_tensor = torch.zeros(grid_length, 1, dtype=torch.float32)
         pitch_tensor = torch.zeros(grid_length, self.num_pitches, dtype=torch.float32)
         velocity_tensor = torch.zeros(grid_length, self.num_pitches, dtype=torch.float32)
         
-        for note in drum_track.notes:
+        for note in all_notes:
+            if note.pitch not in self.drum_mapping:
+                continue
+
             grid_index = int((note.time + 0.5 * ticks_per_subdiv) / ticks_per_subdiv)
             assert grid_index < grid_length
             
@@ -215,8 +345,10 @@ class DrumSequenceEncoder:
     
     def encode_all(self, midis: list[Union[str, symusic.types.Score]]) -> list[torch.Tensor]:
         sequences = []
-        for midi in midis:
-            sequences.append(self.encode(midi))
+        for midi in tqdm.tqdm(midis, desc='Encoding Midi Files'):
+            sequence = self.encode(midi)
+            if sequence is not None:
+                sequences.append(sequence)
         return sequences
     
     def decode(self, tensors: tuple[torch.Tensor, torch.Tensor, torch.Tensor]):
@@ -250,12 +382,11 @@ class DrumSequenceEncoder:
 
 
 if __name__ == '__main__':
-    tokeniser = DrumSequenceTokeniser(subdivision=16, velocity_bands=1)
+    tokeniser = TokeneiserII(velocity_bands=4)
 
     midi_files = []
-    for root, _, files in os.walk(os.path.join('data', 'groove_midi_only')):
-        midi_files.extend([os.path.join(root, file) for file in files if file.endswith('.mid') and 'beat' in file and 'eval' not in os.path.basename(root)])
-    # toks = tokeniser.encode('data/groove_midi_only/drummer1/session1/102_funk_95_beat_4-4.mid')
+    for root, _, files in os.walk(os.path.join('data', 'clean_midi')):
+        midi_files.extend([os.path.join(root, file) for file in files if file.endswith('.mid')]) # and 'beat' in file and 'eval' not in os.path.basename(root)])
     tok_sequences = tokeniser.encode_all(midi_files)
     print(len(tok_sequences))
     print(len(tokeniser.vocab))
