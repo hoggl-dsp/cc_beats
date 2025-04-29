@@ -5,10 +5,11 @@ from typing import Union
 import os
 
 ROLAND_DRUM_MAPPING = {
+    35  : 36, # Kick 2
     36	: 36, # Kick	
+    37	: 38, # Snare X-Stick
     38	: 38, # Snare (Head)
     40	: 38, # Snare (Rim)
-    37	: 38, # Snare X-Stick
     48	: 50, # Tom 1
     50	: 50, # Tom 1 (Rim)
     45  : 47, # Tom 2
@@ -57,36 +58,40 @@ class DrumSequenceTokeniser:
     def __getitem__(self, key: str):
         return self.vocab[key]
 
-    def encode(self, midi: Union[str, symusic.types.Score]) -> list[int]:
+    def encode(self, midi: Union[str, symusic.types.Score]) -> list[int] | None:
         # Load MIDI if needed
         if isinstance(midi, str):
             midi = symusic.Score.from_file(midi)
         
-        drum_track = None
-        for track in midi.tracks:
-            if track.is_drum:
-                drum_track = track
-                break
+        drum_tracks = [track for track in midi.tracks if track.is_drum]
+
+        # Filter out sparse midi files
+        if all([len(track.notes) <= 10 for track in drum_tracks]):
+            return
         
         ticks_per_subdiv = midi.ticks_per_quarter * (4. / self.subdivision)
 
         grid = dict[int, dict[int, int]]()
-        last_note = drum_track.notes[-1].time
+        last_note = max(track.notes[-1].time for track in drum_tracks if len(track.notes) > 0)
         for index in range(int((last_note + 0.5 * ticks_per_subdiv) / ticks_per_subdiv) + 1):
             grid[index] = {}
         
-        for note in drum_track.notes:
-            grid_index = int((note.time + 0.5 * ticks_per_subdiv) / ticks_per_subdiv)
-            
-            note_pitch = self.drum_mapping[note.pitch]
-            note_vel = int(note.velocity * ((self.velocity_bands) / 128))
+        for drum_track in drum_tracks:
+            for note in drum_track.notes:
+                if not note.pitch in self.drum_mapping:
+                    continue
 
-            # We could have multiple of the same drum hits in same subdivision
-            # For simplicity, take the largest velocity of these
-            if note_pitch in grid[grid_index]:
-                grid[grid_index][note_pitch] = max(grid[grid_index][note_pitch], note_vel)
-            else:
-                grid[grid_index][note_pitch] = note_vel
+                grid_index = int((note.time + 0.5 * ticks_per_subdiv) / ticks_per_subdiv)
+                
+                note_pitch = self.drum_mapping[note.pitch]
+                note_vel = int(note.velocity * ((self.velocity_bands) / 128))
+
+                # We could have multiple of the same drum hits in same subdivision
+                # For simplicity, take the largest velocity of these
+                if note_pitch in grid[grid_index]:
+                    grid[grid_index][note_pitch] = max(grid[grid_index][note_pitch], note_vel)
+                else:
+                    grid[grid_index][note_pitch] = note_vel
 
         tok_sequence = []
         tok_sequence.append('<bos>')
@@ -114,7 +119,9 @@ class DrumSequenceTokeniser:
     def encode_all(self, midis: list[Union[str, symusic.types.Score]]) -> list[list[int]]:
         sequences = []
         for midi in midis:
-            sequences.append(self.encode(midi))
+            seqeunce = self.encode(midi)
+            if seqeunce is not None:
+                sequences.append(seqeunce)
         return sequences
     
     def decode(self, tokens: list[int] | torch.Tensor, vocab_inv: dict[int, str] = None) -> symusic.types.Score:
