@@ -317,9 +317,12 @@ class DrumSequenceEncoder:
             return None
 
         ticks_per_subdiv = midi.ticks_per_quarter * (4. / self.subdivision)
-
+        
+        first_note = all_notes[0].time
+        quanitised_first_note = int((first_note + 0.5 * ticks_per_subdiv) / ticks_per_subdiv)
         last_note = all_notes[-1].time
-        grid_length = int((last_note + 0.5 * ticks_per_subdiv) / ticks_per_subdiv) + 1
+        quanitised_last_note = int((last_note + 0.5 * ticks_per_subdiv) / ticks_per_subdiv)
+        grid_length =  quanitised_last_note - quanitised_first_note + 1
 
         hit_tensor = torch.zeros(grid_length, 1, dtype=torch.float32)
         pitch_tensor = torch.zeros(grid_length, self.num_pitches, dtype=torch.float32)
@@ -329,7 +332,7 @@ class DrumSequenceEncoder:
             if note.pitch not in self.drum_mapping:
                 continue
 
-            grid_index = int((note.time + 0.5 * ticks_per_subdiv) / ticks_per_subdiv)
+            grid_index = int((note.time + 0.5 * ticks_per_subdiv) / ticks_per_subdiv) - quanitised_first_note
             assert grid_index < grid_length
             
             note_pitch = self.drum_mapping[note.pitch]
