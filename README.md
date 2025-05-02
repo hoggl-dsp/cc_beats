@@ -2,7 +2,7 @@
 
 Submitted for ECS7022P Computational Creativity at Queen Mary University of London
 
-## Structure
+## Structure
 
 The `main.ipynb` file contains the majority of this projects implementation, including an interface developed as a playground for exprimenting with the system, as well as the code used to train it. Three other files contain some class and function definitions, split to clean up the main notebook. These are packaged as a python project (see the `pyproject.toml` file) and include:
 - `tokeniser.py` - Implementations of a number of tokenisation methods which were experimented with (only `DrumSequenceEncoder` is used in the final system)
