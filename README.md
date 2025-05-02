@@ -28,7 +28,9 @@ Dense sampling: [backbeat_dense.wav](output/audio/backbeat_dense.wav)
 ### Amen
 
 Original: [amen_original](output/audio/amen_original.wav)
+
 Shifting: [amen_shifts](output/audio/amen_shifts.wav)
+
 Breakbeats: [amen_dense](output/audio/amen_dense.wav)
 
 <audio controls src="output/audio/amen_original.wav" title="Original"></audio>
@@ -39,7 +41,9 @@ Breakbeats: [amen_dense](output/audio/amen_dense.wav)
 ### Be my Baby
 
 Original: [be_my_baby_original](output/audio/be_my_baby_original.wav)
+
 Syncopated: [be_my_baby_syncopated](output/audio/be_my_baby_syncopated.wav)
+
 Improvised: [be_my_baby_improvised](output/audio/be_my_baby_improvised.wav)
 
 <audio controls src="output/audio/be_my_baby_original.wav" title="Original"></audio>
